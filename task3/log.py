@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+
+
 import os
 import re
 import paramiko
@@ -15,7 +17,8 @@ HOSTS = [
 SSH_USER = "sftpuser"
 SSH_KEY_PATH = "id_rsa"         
 REMOTE_DIR = "/home/sftpuser"    
-LOCAL_LOGS_DIR = "./logs"        
+LOCAL_LOGS_DIR = "./logs"      
+GRAPH_DIR= "./outputs"  
 
 
 FILENAME_PATTERN = re.compile(
@@ -164,31 +167,40 @@ def print_text_report_and_build_charts(stats):
             graph_intervals[dest] = (c_list, interval_list)
 
    
+    # Save charts to logs directory
     for dest, (creators, counts) in graph_counts.items():
         plt.figure()
         plt.bar(creators, counts)
         plt.title(f"Files created on {dest} (Count)")
         plt.xlabel("Creator machine")
         plt.ylabel("Number of files created")
-        plt.savefig(f"chart_count_{dest}.png")
+
+        output_path = os.path.join(GRAPH_DIR, f"chart_count_{dest}.png")
+        try:
+            plt.savefig(output_path)
+            print(f"[OK] Saved chart: {output_path}")
+        except Exception as e:
+            print(f"[ERROR] Could not save chart_count for {dest}: {e}")
         plt.close()
 
-    
     for dest, (creators, intervals) in graph_intervals.items():
         plt.figure()
         plt.bar(creators, intervals)
         plt.title(f"Average interval on {dest} (sec)")
         plt.xlabel("Creator machine")
         plt.ylabel("Avg interval (seconds)")
-        plt.savefig(f"chart_interval_{dest}.png")
+
+        output_path = os.path.join(GRAPH_DIR, f"chart_interval_{dest}.png")
+        try:
+            plt.savefig(output_path)
+            print(f"[OK] Saved chart: {output_path}")
+        except Exception as e:
+            print(f"[ERROR] Could not save chart_interval for {dest}: {e}")
         plt.close()
 
-    print("\n[INFO] Графіки збережено як chart_count_<dest>.png та chart_interval_<dest>.png\n")
 
 def main():
     os.makedirs(LOCAL_LOGS_DIR, exist_ok=True)
-
-    print("=== Збираємо файли created_by_* з усіх віртуальних машин ===")
     all_local_files = []
     for host_info in HOSTS:
         new_files = fetch_created_files_from_vm(host_info)
