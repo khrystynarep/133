@@ -1,10 +1,24 @@
-#!/usr/bin/env python3
-
 import os
+import subprocess
+import threading
+import time
+from flask import Flask, jsonify
 import paramiko
+import requests
 import matplotlib.pyplot as plt
 from collections import defaultdict
 from datetime import datetime
+
+
+AWS_HOST = "34.207.124.149"
+AWS_USER = "ubuntu"
+SSH_KEY_PATH = "id_rsa"
+TUNNEL_PORT = 6000
+LOCAL_FLASK_PORT = 6000
+API_KEY = "my_secret_key"
+UPLOAD_URL = f"http://{AWS_HOST}:5000/upload_log"
+SSH_KEY_PATH = "tesk3keys.pem"
+
 
 HOSTS = [
     {"name": "sftp1", "ip": "192.168.56.11"},
@@ -13,10 +27,22 @@ HOSTS = [
 ]
 
 SSH_USER = "sftpuser"
-SSH_KEY_PATH = "id_rsa"
 REMOTE_LOG_FILE = "/home/sftpuser/connection_log.txt"
 LOCAL_LOGS_DIR = "./logs"
-GRAPH_DIR = "./outputs"
+
+
+app = Flask(__name__)
+
+@app.route("/trigger_upload", methods=["POST"])
+def trigger_upload():
+    try:
+        print("[INFO] Triggered remotely by server. Fetching logs...")
+        collect_and_upload_logs()
+        return jsonify({"status": "ok", "message": "Logs sent"}), 200
+    except Exception as e:
+        print(f"[ERROR] {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 
 def fetch_log_file_from_vm(host_info):
     ip = host_info["ip"]
@@ -30,90 +56,63 @@ def fetch_log_file_from_vm(host_info):
         sftp.get(REMOTE_LOG_FILE, local_path)
         sftp.close()
         ssh.close()
+        print(f"[OK] Downloaded log from {name}")
         return local_path
     except Exception as e:
         print(f"[ERROR] Cannot fetch log from {ip}: {e}")
         return None
 
-def parse_connection_log(filepath):
-    stats = defaultdict(lambda: defaultdict(list))
-    with open(filepath, "r") as f:
-        for line in f:
-            try:
-                timestamp_str, message = line.strip().split(" | ")
-                dt = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
-                parts = message.split("from")[1].strip().split(" to ")
-                source = parts[0]
-                destination = parts[1]
-                stats[destination][source].append(dt)
-            except Exception as e:
-                print(f"[WARN] Failed to parse line: {line.strip()} — {e}")
-    return stats
 
-def compute_analysis(stats):
-    for dest, creators_data in stats.items():
-        for creator, times in creators_data.items():
-            times_list = sorted(times)
-            count_files = len(times_list)
-            if count_files <= 1:
-                avg_int = 0.0
-            else:
-                deltas = [(times_list[i] - times_list[i - 1]).total_seconds() for i in range(1, count_files)]
-                avg_int = sum(deltas) / len(deltas)
-            stats[dest][creator] = {
-                "count": count_files,
-                "avg_interval": avg_int
-            }
-    return stats
+def send_log_to_server(filepath):
+    try:
+        with open(filepath, "rb") as f:
+            files = {"file": (os.path.basename(filepath), f)}
+            headers = {"Authorization": f"Bearer {API_KEY}"}
+            response = requests.post(UPLOAD_URL, headers=headers, files=files)
+            print(f"[UPLOAD] {filepath} -> {response.status_code}: {response.text}")
+    except Exception as e:
+        print(f"[ERROR] Upload failed for {filepath}: {e}")
 
-def print_text_report_and_build_charts(stats):
-    print("\\n===== Результат аналізу (destination vs. creator) =====")
-    print("Dest Machine | Creator Machine | Count | Avg Interval (sec)")
-    graph_counts = {}
-    graph_intervals = {}
-    for dest, creators_data in stats.items():
-        c_list, count_list, interval_list = [], [], []
-        for creator, data in creators_data.items():
-            count = data["count"]
-            avg = data["avg_interval"]
-            print(f"{dest:<13} | {creator:<15} | {count:<5} | {avg:.2f}")
-            c_list.append(creator)
-            count_list.append(count)
-            interval_list.append(avg)
-        if c_list:
-            graph_counts[dest] = (c_list, count_list)
-            graph_intervals[dest] = (c_list, interval_list)
-    os.makedirs(GRAPH_DIR, exist_ok=True)
-    for dest, (creators, counts) in graph_counts.items():
-        plt.figure()
-        plt.bar(creators, counts)
-        plt.title(f"Files created on {dest} (Count)")
-        plt.xlabel("Creator machine")
-        plt.ylabel("Number of files created")
-        plt.savefig(os.path.join(GRAPH_DIR, f"chart_count_{dest}.png"))
-        plt.close()
-    for dest, (creators, intervals) in graph_intervals.items():
-        plt.figure()
-        plt.bar(creators, intervals)
-        plt.title(f"Average interval on {dest} (sec)")
-        plt.xlabel("Creator machine")
-        plt.ylabel("Avg interval (seconds)")
-        plt.savefig(os.path.join(GRAPH_DIR, f"chart_interval_{dest}.png"))
-        plt.close()
-    print("\\n[INFO] Графіки збережено у ./outputs\\n")
-
-def main():
+# === Головна функція збору та відправки ===
+def collect_and_upload_logs():
     os.makedirs(LOCAL_LOGS_DIR, exist_ok=True)
-    all_stats = defaultdict(lambda: defaultdict(list))
     for host in HOSTS:
         log_path = fetch_log_file_from_vm(host)
         if log_path:
-            stats = parse_connection_log(log_path)
-            for dest, creators in stats.items():
-                for creator, times in creators.items():
-                    all_stats[dest][creator].extend(times)
-    stats = compute_analysis(all_stats)
-    print_text_report_and_build_charts(stats)
+            send_log_to_server(log_path)
+
+
+def setup_reverse_ssh_tunnel():
+    print("[INFO] Setting up reverse SSH tunnel to server...")
+    ssh_cmd = [
+        "ssh",
+        "-i", SSH_KEY_PATH,
+        "-o", "StrictHostKeyChecking=no",
+        "-N",
+        "-R", f"{TUNNEL_PORT}:localhost:{LOCAL_FLASK_PORT}",
+        f"{AWS_USER}@{AWS_HOST}"
+    ]
+    try:
+        subprocess.Popen(ssh_cmd)
+        print(f"[OK] Tunnel established: AWS:{TUNNEL_PORT} => Local:{LOCAL_FLASK_PORT}")
+    except Exception as e:
+        print(f"[ERROR] Tunnel failed: {e}")
+
+
+def start_flask_thread():
+    thread = threading.Thread(target=lambda: app.run(host="0.0.0.0", port=LOCAL_FLASK_PORT))
+    thread.daemon = True
+    thread.start()
+
 
 if __name__ == "__main__":
-    main()
+    print("[BOOT] Starting local log server with auto-tunnel...")
+    setup_reverse_ssh_tunnel()
+    start_flask_thread()
+    print("[READY] You can now trigger upload from the server via /refresh endpoint.")
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\n[EXIT] Exiting log.py gracefully.")
+
