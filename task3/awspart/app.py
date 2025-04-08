@@ -9,6 +9,7 @@ UPLOAD_FOLDER = './uploaded_logs'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 API_KEY = "my_secret_key"
+TAILSCALE_CLIENT_IP = "100.123.35.15"  
 
 def parse_connection_log(filepath):
     entries = []
@@ -59,11 +60,10 @@ def upload_log():
 @app.route('/refresh', methods=['POST'])
 def refresh():
     try:
-        print("[REFRESH] Calling local machine through SSH tunnel...")
-        response = requests.post("http://localhost:6000/trigger_upload", timeout=15)
-        print("[REFRESH] Response:", response.status_code, response.text)
+        response = requests.post(f"http://{TAILSCALE_CLIENT_IP}:6000/trigger_upload", timeout=15)
+        print("[REFRESH] Triggered client update:", response.status_code)
     except Exception as e:
-        print(f"[ERROR] Tunnel request failed: {e}")
+        print("[ERROR] Could not contact client via Tailscale:", e)
     return redirect(url_for("index"))
 
 @app.route("/outputs/<path:filename>")
