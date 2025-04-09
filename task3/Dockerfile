@@ -1,34 +1,34 @@
+############################
+# 1. Builder
+############################
+FROM python:3.12-slim AS builder
 
-FROM python:3.12-alpine as builder
-
-
-RUN apk add --no-cache build-base libffi-dev openssl-dev
-
-
-WORKDIR /install
-COPY requirements.txt .
-
-
-RUN pip install --no-cache-dir --prefix=/install flask requests paramiko
-
-
-FROM python:3.12-alpine
-
-
-COPY --from=builder /install /usr/local
-
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential libffi-dev libssl-dev cargo && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+
+COPY requirements.txt .
+RUN python -m pip install --upgrade pip && \
+    python -m pip install --no-cache-dir -r requirements.txt
+
+COPY id_rsa id_rsa.pub ./
+RUN chmod 600 id_rsa
+
 COPY log.py .
-COPY id_rsa ./id_rsa
 
+############################
+# 2. Runtime (distroless)
+############################
+FROM gcr.io/distroless/python3-debian12
 
-RUN chmod 600 id_rsa && mkdir -p logs
+COPY --from=builder /usr/local /usr/local
+WORKDIR /app
 
+COPY --from=builder /app/log.py .
+COPY --from=builder /app/id_rsa /root/.ssh/id_rsa
+COPY --from=builder /app/id_rsa.pub /root/.ssh/id_rsa.pub
 
-RUN python -m compileall . && find . -name '*.py' -delete
-
-
+ENTRYPOINT ["python", "/app/log.py"]
 EXPOSE 6000
-
-CMD ["python", "__pycache__/log.cpython-312.pyc"]
