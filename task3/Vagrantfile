@@ -1,0 +1,53 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+Vagrant.configure("2") do |config|
+  config.vm.box = "ubuntu/focal64"
+
+  config.vm.provider "virtualbox" do |vb|
+    vb.memory = "512"
+    vb.cpus = 1
+  end
+
+  ["sftp1", "sftp2", "sftp3"].each_with_index do |hostname, index|
+    config.vm.define hostname do |node|
+      node.vm.hostname = hostname
+      node.vm.network "private_network", ip: "192.168.56.#{11 + index}"
+
+      node.vm.provision "shell", inline: <<-SHELL
+        echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf > /dev/null
+
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update
+        apt-get install -y openssh-server rkhunter cron
+
+        # Створення користувача
+        useradd -m -s /bin/bash sftpuser
+        mkdir -p /home/sftpuser/.ssh
+        chmod 700 /home/sftpuser/.ssh
+
+        # Додаємо публічний ключ
+        cat /vagrant/id_rsa.pub >> /home/sftpuser/.ssh/authorized_keys
+        chmod 600 /home/sftpuser/.ssh/authorized_keys
+        chown -R sftpuser:sftpuser /home/sftpuser/.ssh
+
+        # Копіюємо приватний ключ
+        cp /vagrant/id_rsa /home/sftpuser/.ssh/id_rsa
+        chmod 600 /home/sftpuser/.ssh/id_rsa
+        chown sftpuser:sftpuser /home/sftpuser/.ssh/id_rsa
+
+        # Копіюємо Bash-скрипт
+        cp /vagrant/create_files.sh /home/sftpuser/create_files.sh
+        chmod +x /home/sftpuser/create_files.sh
+        chown sftpuser:sftpuser /home/sftpuser/create_files.sh
+
+        # Додаємо cron-запуск скрипта кожні 5 хв
+        echo "*/5 * * * * /home/sftpuser/create_files.sh" | crontab -u sftpuser -
+
+        
+        rkhunter --update
+        rkhunter --propupd
+      SHELL
+    end
+  end
+end
