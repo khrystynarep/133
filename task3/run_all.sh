@@ -1,7 +1,7 @@
 #!/bin/bash
 
-set -e  # Stop on any error
-cd "$(dirname "$0")"   # Go to script's own folder (task3)
+set -e  
+cd "$(dirname "$0")"   
 
 echo "📁 [1] Entered task3 directory: $(pwd)"
 
