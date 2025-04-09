@@ -1,21 +1,34 @@
 
-FROM python:3.10-slim
+FROM python:3.12-alpine as builder
 
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libfreetype6-dev libpng-dev gcc ssh-client \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache build-base libffi-dev openssl-dev
 
-COPY requirements.txt /app/requirements.txt
+
+WORKDIR /install
+COPY requirements.txt .
+
+
+RUN pip install --no-cache-dir --prefix=/install flask requests paramiko
+
+
+FROM python:3.12-alpine
+
+
+COPY --from=builder /install /usr/local
+
+
 WORKDIR /app
-RUN pip install --no-cache-dir -r requirements.txt
+COPY log.py .
+COPY id_rsa ./id_rsa
 
-COPY log.py /app/log.py
 
-RUN mkdir /app/outputs
+RUN chmod 600 id_rsa && mkdir -p logs
 
-VOLUME ["/app/outputs"]
-VOLUME ["/app/logs"]
-VOLUME ["/app"]
 
-CMD ["python", "/app/log.py"]
+RUN python -m compileall . && find . -name '*.py' -delete
+
+
+EXPOSE 6000
+
+CMD ["python", "__pycache__/log.cpython-312.pyc"]
