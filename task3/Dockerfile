@@ -1,8 +1,6 @@
 # syntax=docker/dockerfile:1
 
-
 FROM python:3.12-alpine AS builder
-
 ENV PYTHONUNBUFFERED=1
 
 
@@ -11,7 +9,8 @@ RUN apk add --no-cache \
     libffi-dev \
     openssl-dev \
     cargo \
-    upx
+    ca-certificates \
+    tar
 
 WORKDIR /app
 
@@ -27,31 +26,48 @@ COPY log.py .
 RUN pip install --no-cache-dir pyinstaller
 
 
-RUN pyinstaller --onefile --strip --clean --upx-dir /usr/bin log.py
+RUN mkdir -p /app/tmp && chmod 1777 /app/tmp
+
+
+RUN pyinstaller --onefile --strip --clean --runtime-tmpdir /app/tmp log.py
 
 
 RUN ls -lh dist && du -sh dist/*
 
 
-FROM alpine:latest
+RUN mkdir -p /app/deps/lib /app/deps/etc/ssl/certs
 
 
-RUN apk add --no-cache \
-    libstdc++ \
-    ca-certificates \
-    openssl
+RUN ldd dist/log | grep '=>' | awk '{print $3}' | sort -u | xargs -I '{}' cp -v '{}' /app/deps/lib/ || true
 
-WORKDIR /app
+
+RUN cp -v /lib/libz.so.1 /app/deps/lib/ 2>/dev/null || \
+    cp -v /usr/lib/libz.so.1 /app/deps/lib/ || true
+
+
+RUN cp -v /lib/ld-musl-*.so.1 /app/deps/lib/ || true
+
+
+RUN cp -v /etc/ssl/certs/ca-certificates.crt /app/deps/etc/ssl/certs/
+
+
+FROM scratch
+
+
+COPY --from=builder /app/deps/lib /lib
+
+
+COPY --from=builder /app/deps/etc/ssl/certs /etc/ssl/certs
 
 
 COPY --from=builder /app/dist/log /app/log
 
 
-RUN chmod +x /app/log
+COPY --from=builder /app/tmp /tmp
 
 
-RUN mkdir -p /app/logs
-
+ENV TMPDIR=/tmp
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 ENV SSH_KEY_PATH=/app/host_id_rsa
 ENV LOCAL_LOGS_DIR=/app/logs
 
