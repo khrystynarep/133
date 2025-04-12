@@ -1,34 +1,45 @@
-############################
-# 1. Builder
-############################
-FROM python:3.12-slim AS builder
+# syntax=docker/dockerfile:1
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential libffi-dev libssl-dev cargo && \
-    rm -rf /var/lib/apt/lists/*
+
+FROM python:3.12-alpine AS builder
+
+ENV PYTHONUNBUFFERED=1
+
+
+RUN apk add --no-cache build-base libffi-dev openssl-dev cargo upx
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN python -m pip install --upgrade pip && \
-    python -m pip install --no-cache-dir -r requirements.txt
 
-COPY id_rsa id_rsa.pub ./
-RUN chmod 600 id_rsa
+COPY requirements.txt .
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
 
 COPY log.py .
 
-############################
-# 2. Runtime (distroless)
-############################
-FROM gcr.io/distroless/python3-debian12
 
-COPY --from=builder /usr/local /usr/local
+RUN pip install --no-cache-dir pyinstaller
+
+
+RUN pyinstaller --onefile --upx-dir /usr/bin log.py
+
+
+FROM alpine:latest
+
+
+RUN apk add --no-cache libstdc++ ca-certificates openssl
+
 WORKDIR /app
 
-COPY --from=builder /app/log.py .
-COPY --from=builder /app/id_rsa /root/.ssh/id_rsa
-COPY --from=builder /app/id_rsa.pub /root/.ssh/id_rsa.pub
+COPY --from=builder /app/dist/log .
 
-ENTRYPOINT ["python", "/app/log.py"]
+
+RUN mkdir -p /app/logs
+
+ENV SSH_KEY_PATH=/app/host_id_rsa
+ENV LOCAL_LOGS_DIR=/app/logs
+
 EXPOSE 6000
+
+ENTRYPOINT ["/app/log"]
