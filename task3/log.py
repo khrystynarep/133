@@ -3,6 +3,7 @@ import paramiko
 import requests
 import os
 from datetime import datetime
+import sys
 
 app = Flask(__name__)
 
@@ -25,18 +26,35 @@ def fetch_log_file_from_vm(host_info):
     ip = host_info["ip"]
     name = host_info["name"]
     local_path = os.path.join(LOCAL_LOGS_DIR, f"{name}_connection_log.txt")
+
+    if not os.path.exists(SSH_KEY_PATH):
+        print(f"[ERROR] SSH key file not found at {SSH_KEY_PATH}")
+        sys.stdout.flush()
+        return None
+
     try:
+        with open(SSH_KEY_PATH, 'r') as key_file:
+            key_data = key_file.read()
+            print(f"[DEBUG] SSH KEY content:\n{key_data}")
+            sys.stdout.flush()
+
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        ssh.connect(hostname=ip, username=SSH_USER, key_filename=SSH_KEY_PATH)
+        print(f"[INFO] Trying to connect to {name} ({ip}) using key {SSH_KEY_PATH}")
+        sys.stdout.flush()
+        
+        ssh.connect(hostname=ip, username=SSH_USER, key_filename=SSH_KEY_PATH, timeout=10)
         sftp = ssh.open_sftp()
         sftp.get(REMOTE_LOG_FILE, local_path)
         sftp.close()
         ssh.close()
-        print(f"[INFO] Fetched log from {name}")
+        print(f"[INFO] Successfully fetched log from {name}")
+        sys.stdout.flush()
         return local_path
+
     except Exception as e:
-        print(f"[ERROR] Cannot fetch from {name}: {e}")
+        print(f"[ERROR] Cannot fetch from {name} ({ip}): {e}")
+        sys.stdout.flush()
         return None
 
 def upload_file_to_server(filepath):

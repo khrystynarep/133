@@ -1,0 +1,25 @@
+sudo docker build -t log-client-slim .
+sudo docker stop my_logger4 && sudo docker rm my_logger4
+
+sudo docker run -d \
+  --network host \
+  -e AWS_SERVER_IP=100.73.158.1 \
+  -e API_KEY=my_secret_key \
+  -e SSH_KEY_PATH=/app/host_id_rsa \
+  -e LOCAL_LOGS_DIR=/app/logs \
+  -v $(pwd)/id_rsa:/app/host_id_rsa:ro \
+  --name my_logger4 \
+  log-client-slim
+
+
+///second version 
+
+sudo docker run -d \
+  --network host \
+  -e AWS_SERVER_IP=100.73.158.1 \
+  -e API_KEY=my_secret_key \
+  -e SSH_KEY_PATH=/app/host_id_rsa \
+  -e LOCAL_LOGS_DIR=/app/logs \
+  -v $(pwd)/id_rsa:/app/host_id_rsa:ro \
+  --name my_logger4 \
+  log-client

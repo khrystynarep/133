@@ -1,34 +1,76 @@
-############################
-# 1. Builder
-############################
-FROM python:3.12-slim AS builder
+# syntax=docker/dockerfile:1
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential libffi-dev libssl-dev cargo && \
-    rm -rf /var/lib/apt/lists/*
+FROM python:3.12-alpine AS builder
+ENV PYTHONUNBUFFERED=1
+
+
+RUN apk add --no-cache \
+    build-base \
+    libffi-dev \
+    openssl-dev \
+    cargo \
+    ca-certificates \
+    tar
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN python -m pip install --upgrade pip && \
-    python -m pip install --no-cache-dir -r requirements.txt
 
-COPY id_rsa id_rsa.pub ./
-RUN chmod 600 id_rsa
+COPY requirements.txt .
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
 
 COPY log.py .
 
-############################
-# 2. Runtime (distroless)
-############################
-FROM gcr.io/distroless/python3-debian12
 
-COPY --from=builder /usr/local /usr/local
-WORKDIR /app
+RUN pip install --no-cache-dir pyinstaller
 
-COPY --from=builder /app/log.py .
-COPY --from=builder /app/id_rsa /root/.ssh/id_rsa
-COPY --from=builder /app/id_rsa.pub /root/.ssh/id_rsa.pub
 
-ENTRYPOINT ["python", "/app/log.py"]
+RUN mkdir -p /app/tmp && chmod 1777 /app/tmp
+
+
+RUN pyinstaller --onefile --strip --clean --runtime-tmpdir /app/tmp log.py
+
+
+RUN ls -lh dist && du -sh dist/*
+
+
+RUN mkdir -p /app/deps/lib /app/deps/etc/ssl/certs
+
+
+RUN ldd dist/log | grep '=>' | awk '{print $3}' | sort -u | xargs -I '{}' cp -v '{}' /app/deps/lib/ || true
+
+
+RUN cp -v /lib/libz.so.1 /app/deps/lib/ 2>/dev/null || \
+    cp -v /usr/lib/libz.so.1 /app/deps/lib/ || true
+
+
+RUN cp -v /lib/ld-musl-*.so.1 /app/deps/lib/ || true
+
+
+RUN cp -v /etc/ssl/certs/ca-certificates.crt /app/deps/etc/ssl/certs/
+
+
+FROM scratch
+
+
+COPY --from=builder /app/deps/lib /lib
+
+
+COPY --from=builder /app/deps/etc/ssl/certs /etc/ssl/certs
+
+
+COPY --from=builder /app/dist/log /app/log
+
+
+COPY --from=builder /app/tmp /tmp
+
+
+ENV TMPDIR=/tmp
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+ENV SSH_KEY_PATH=/app/host_id_rsa
+ENV LOCAL_LOGS_DIR=/app/logs
+
 EXPOSE 6000
+
+ENTRYPOINT ["/app/log"]
